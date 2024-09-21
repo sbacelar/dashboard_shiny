@@ -1,0 +1,179 @@
+---
+title: "IBE 2023 Dashboard"
+format: 
+  dashboard:
+    orientation: columns
+    theme: cosmo
+    nav-buttons: [github]
+server: shiny
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(plotly)
+library(DT)
+library(zoo)
+
+# Load data and prepare functions
+load("data/q1_3.RData")
+load("data/q1_3_long.RData")
+q1_3_long <- q1_3_long |> select(-c(Name, Abbreviation))
+
+# Prepare data
+df <- q1_3_long |>
+  rename(
+    year = Ano,
+    value = Valor,
+    variable_code = Indicador,
+    variable_label = Abreviatura
+  ) |>
+  mutate(variable_label = paste(variable_code, variable_label, sep = ": "))
+
+# Function to plot variables
+plot_variables <- function(data,
+                           variables_to_plot,
+                           domain = NULL,
+                           smooth = FALSE,
+                           year_column = "year",
+                           variable_column = "variable_code",
+                           label_column = "variable_label",
+                           value_column = "value") {
+  
+  plot_data <- data %>%
+    filter(!!sym(variable_column) %in% variables_to_plot)
+  
+  if (smooth) {
+    plot_data <- plot_data %>%
+      group_by(!!sym(label_column)) %>%
+      arrange(!!sym(year_column)) %>%
+      mutate(
+        smoothed_value = zoo::rollapply(!!sym(value_column), width = 3, FUN = mean, align = "center", fill = NA),
+        smoothed_value = ifelse(is.na(smoothed_value), !!sym(value_column), smoothed_value),
+        text = paste("Year:", !!sym(year_column), 
+                     "<br>Value:", round(!!sym(value_column), 2),
+                     "<br>Smoothed Value:", round(smoothed_value, 2),
+                     "<br>Indicator:", !!sym(label_column))
+      ) %>%
+      ungroup()
+    
+    p <- ggplot(plot_data, aes(x = !!sym(year_column), y = smoothed_value, 
+                               color = !!sym(label_column), group = !!sym(label_column),
+                               text = text)) +
+      geom_line() +
+      labs(title = "Smoothed Data")
+  } else {
+    p <- ggplot(plot_data, aes(x = !!sym(year_column), y = !!sym(value_column), 
+                               color = !!sym(label_column), group = !!sym(label_column),
+                               text = paste("Year:", !!sym(year_column), 
+                                            "<br>Value:", round(!!sym(value_column), 2), 
+                                            "<br>Indicator:", !!sym(label_column)))) +
+      geom_line() +
+      geom_point() +
+      labs(title = "Raw Data")
+  }
+  
+  p <- p + theme_minimal(base_size = 12) +
+    theme(legend.title = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 8)) +
+    labs(x = "Ano", y = "No.")
+  
+  if (!is.null(domain)) {
+    domain_data <- plot_data %>% filter(!!sym(variable_column) == domain)
+    if (smooth) {
+      p <- p + geom_line(data = domain_data, aes(y = smoothed_value), size = 1.5)
+    } else {
+      p <- p + geom_line(data = domain_data, size = 1.5)
+    }
+  }
+  
+  p_plotly <- ggplotly(p, tooltip = "text") %>%
+    layout(
+      legend = list(title = list(text = '')),
+      hovermode = "closest"
+    )
+  
+  return(p_plotly)
+}
+```
+
+# Plots {.sidebar}
+
+```{r}
+#| title: Main Category
+selectInput("main_category", "Select Main Category:",
+            choices = c("Global", "Condições materiais de vida", "Qualidade de vida"))
+
+uiOutput("sub_category")
+
+checkboxInput("smooth", "Smooth Lines", value = FALSE)
+```
+
+# Main Content
+
+## Column {width=100%}
+
+```{r}
+#| title: Plot
+plotlyOutput("selected_plot", height = "800px")
+```
+
+```{r}
+#| context: server
+output$sub_category <- renderUI({
+  if (input$main_category == "Condições materiais de vida") {
+    selectInput("cmv_domain", "Select Domain:",
+                choices = c("All", unique(df$parent[df$parent %in% c("D01", "D02", "D03")])))
+  } else if (input$main_category == "Qualidade de vida") {
+    selectInput("qv_domain", "Select Domain:",
+                choices = c("All", unique(df$parent[df$parent %in% c("D04", "D05", "D06", "D07", "D08", "D09", "D10")])))
+  } else {
+    return(NULL)
+  }
+})
+
+selected_data <- reactive({
+  if (input$main_category == "Global") {
+    list(variables = c("P1", "P2", "IBE"), domain = NULL)
+  } else if (input$main_category == "Condições materiais de vida") {
+    if (!is.null(input$cmv_domain) && input$cmv_domain != "All") {
+      indicators <- df %>% 
+        filter(parent == input$cmv_domain) %>% 
+        pull(variable_code) %>% 
+        unique()
+      list(variables = c(indicators, input$cmv_domain), domain = input$cmv_domain)
+    } else {
+      list(variables = c("D01", "D02", "D03", "P1"), domain = "P1")
+    }
+  } else {
+    if (!is.null(input$qv_domain) && input$qv_domain != "All") {
+      indicators <- df %>% 
+        filter(parent == input$qv_domain) %>% 
+        pull(variable_code) %>% 
+        unique()
+      list(variables = c(indicators, input$qv_domain), domain = input$qv_domain)
+    } else {
+      list(variables = c("D04", "D05", "D06", "D07", "D08", "D09", "D10", "P2"), domain = "P2")
+    }
+  }
+})
+
+output$selected_plot <- renderPlotly({
+  data <- selected_data()
+  plot_variables(
+    data = df,
+    variables_to_plot = data$variables,
+    domain = data$domain,
+    smooth = input$smooth
+  )
+})
+```
+
+# Data
+
+```{r}
+#| title: Data Table
+DT::datatable(q1_3 |>
+  select(-ord, -Abreviatura, -Name, -Abbreviation) |>
+  rename(nível = level, pai = parent),
+  options = list(pageLength = 15, scrollX = TRUE))
+```

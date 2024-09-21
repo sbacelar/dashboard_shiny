@@ -1,0 +1,10 @@
+name: ibe_shiny
+title:
+username: sbac
+account: sbac
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12779559
+bundleId: 9127118
+url: https://sbac.shinyapps.io/ibe_shiny/
+version: 1
